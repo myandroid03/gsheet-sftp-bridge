@@ -1,59 +1,41 @@
-import os
-from flask import Flask, request, jsonify
-import paramiko
-
-app = Flask(__name__)
-
-# Ambil data sensitif dari Environment Variables Render
-SFTP_HOST = os.environ.get("SFTP_HOST", "149.129.254.152")
-SFTP_PORT = int(os.environ.get("SFTP_PORT", 22))
-SFTP_USER = os.environ.get("SFTP_USER", "")
-SFTP_PASS = os.environ.get("SFTP_PASS", "")
-
-@app.route('/upload', methods=['POST'])
-def upload_sftp():
-    data = request.get_json()
-    if not data:
-        return jsonify({"status": "error", "message": "Payload JSON tidak ditemukan"}), 400
-
-    folder_id = data.get("folder_id") # Contoh: NC4766
-    files = data.get("files", [])     # List file: [{filename: "...", content: "..."}, ...]
-
-    if not folder_id or not files:
-        return jsonify({"status": "error", "message": "folder_id atau files tidak boleh kosong"}), 400
-
-    try:
-        # Transpor SSH & SFTP Connection
-        transport = paramiko.Transport((SFTP_HOST, SFTP_PORT))
-        transport.connect(username=SFTP_USER, password=SFTP_PASS)
-        sftp = paramiko.SFTPClient.from_transport(transport)
-
-        # Path tujuan utama di server SFTP
-        base_path = "/home/Live/in/DataToScyllaPro"
-        target_dir = f"{base_path}/{folder_id}"
-
-        # Buat folder jika belum ada
-        try:
-            sftp.stat(target_dir)
-        except FileNotFoundError:
-            sftp.mkdir(target_dir)
-
-        # Upload setiap file
-        for f in files:
-            remote_file_path = f"{target_dir}/{f['filename']}"
-            with sftp.open(remote_file_path, 'w') as remote_file:
-                remote_file.write(f['content'])
-
-        sftp.close()
-        transport.close()
-
-        return jsonify({
-            "status": "success",
-            "message": f"Berhasil membuat/mengupdate folder {folder_id} dan mengunggah {len(files)} file."
-        }), 200
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+# === TAB 1: UPSERT (D365 Template Matching) ===
+with tab1:
+    st.subheader("Form Input / Update Customer (D365 Standard)")
+    gsheet_url = st.text_input("URL atau Nama File Google Sheet:", value="")
+    
+    with st.form("upsert_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            company = st.text_input("Company (dataAreaId)", value="BFI")
+            cust_id = st.text_input("Customer Account / ID *")
+            cust_name = st.text_input("Organization Name (Customer Name) *")
+            cust_group = st.text_input("Customer Group ID (e.g. GT_RETAIL)")
+        with col2:
+            phone = st.text_input("Primary Phone")
+            segment = st.text_input("Sales Segment ID (Channel)")
+            address = st.text_area("Address Street")
+            
+        submitted = st.form_submit_button("🚀 Submit Upsert to Queue")
+        
+        if submitted:
+            if not cust_id or not cust_name or not gsheet_url:
+                st.error("Customer ID, Name, dan URL Google Sheet wajib diisi!")
+            else:
+                try:
+                    gc = get_gsheet_client()
+                    sh = gc.open_by_url(gsheet_url) if "docs.google.com" in gsheet_url else gc.open(gsheet_url)
+                    worksheet = sh.worksheet(SHEET_NAME)
+                    
+                    # Cek apakah Customer ID sudah ada untuk Upsert
+                    cell = worksheet.find(cust_id)
+                    if cell:
+                        row = cell.row
+                        # Update baris eksisting (A:J)
+                        worksheet.update(f"A{row}:J{row}", [[company, cust_id, cust_name, cust_group, address, phone, segment, "UPSERT", "PENDING", "Updated via Web UI"]])
+                        st.success(f"Data Customer **{cust_id}** diperbarui di baris {row} dengan status **PENDING**!")
+                    else:
+                        # Append baris baru
+                        worksheet.append_row([company, cust_id, cust_name, cust_group, address, phone, segment, "UPSERT", "PENDING", "Inserted via Web UI"])
+                        st.success(f"Customer **{cust_id}** ditambahkan ke antrean **UPSERT**!")
+                except Exception as e:
+                    st.error(f"Gagal terhubung ke Google Sheet: {str(e)}")
